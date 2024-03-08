@@ -15,6 +15,9 @@ pub(crate) struct Opts {
     /// Bin serve instance to upload binaries to.
     #[clap(long, value_hint = ValueHint::Url, default_value = "http://localhost:8080")]
     pub(crate) bin_serve_endpoint: String,
+    /// Path to cargo executable.
+    #[clap(long, value_hint = ValueHint::FilePath, default_value = "/usr/local/bin/cargo")]
+    pub(crate) cargo_path: PathBuf,
 
     /// Directory to write log files to.
     #[arg(long, value_hint = ValueHint::DirPath, default_value = "./logs")]

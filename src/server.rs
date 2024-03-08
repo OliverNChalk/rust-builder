@@ -12,10 +12,10 @@ use tracing::{debug, info};
 use crate::opts::Opts;
 
 const GIT_BIN: &str = "/usr/bin/git";
-const CARGO_BIN: &str = "/usr/bin/cargo";
 
 pub(crate) struct Server {
     // Config.
+    cargo_path: PathBuf,
     bin_serve_endpoint: String,
 
     // State.
@@ -121,7 +121,7 @@ impl Server {
         }
 
         // Re-build all binaries in workspace.
-        let output = Command::new(CARGO_BIN)
+        let output = Command::new(&self.cargo_path)
             .arg("build")
             .arg("--release")
             .arg("--manifest-path")
@@ -181,6 +181,7 @@ impl Server {
     pub(crate) fn init(cxl: CancellationToken, opts: Opts) -> tokio::task::JoinHandle<()> {
         let server = Server {
             bin_serve_endpoint: opts.bin_serve_endpoint,
+            cargo_path: opts.cargo_path,
 
             repos: opts
                 .repos
