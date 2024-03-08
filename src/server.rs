@@ -2,12 +2,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use anyhow::anyhow;
 use git2::Repository;
 use reqwest::{multipart, Body};
 use tokio::process::Command;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::opts::Opts;
 
@@ -50,7 +51,7 @@ impl Server {
         );
     }
 
-    async fn pull(repo: &Repository) {
+    async fn pull(repo: &Repository) -> anyhow::Result<()> {
         let git_dir = repo.path();
         let work_tree = repo.path().parent().unwrap();
 
@@ -66,23 +67,23 @@ impl Server {
             .spawn()
             .unwrap()
             .wait_with_output()
-            .await
-            .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(0),
+            .await?;
+        anyhow::ensure!(
+            output.status.code() == Some(0),
             "`git pull --ff-only` failed to execute; repo={work_tree:?}; output={}",
             String::from_utf8_lossy(&output.stderr)
         );
+
+        Ok(())
     }
 
     fn head_hash(repo: &Repository) -> String {
         hex::encode(repo.head().unwrap().target().unwrap().as_bytes())
     }
 
-    fn read_executables(dir: &Path) -> Vec<PathBuf> {
-        std::fs::read_dir(dir)
-            .unwrap_or_else(|err| panic!("Failed to read directory; dir={dir:?}; err={err}"))
+    fn read_executables(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+        Ok(std::fs::read_dir(dir)
+            .map_err(|err| anyhow!("Failed to read directory; dir={dir:?}; err={err}"))?
             .map(|path| path.unwrap().path())
             .filter(|path| {
                 // Filter symlinks & directories (non regular files).
@@ -94,10 +95,10 @@ impl Server {
                 // Filter non executable files.
                 metadata.permissions().mode() & 0o111 != 0
             })
-            .collect()
+            .collect())
     }
 
-    async fn rebuild(&self, repo: &Repository) {
+    async fn rebuild(&self, repo: &Repository) -> anyhow::Result<()> {
         let commit_hash = Self::head_hash(repo);
 
         // Setup paths.
@@ -110,13 +111,7 @@ impl Server {
 
         // Remove existing binaries (ensures we stop uploading renamed/removed
         // packages).
-        for executable in Self::read_executables(&artifacts) {
-            println!(
-                "Removing (local): {}-{}",
-                executable.file_name().unwrap().to_str().unwrap(),
-                commit_hash
-            );
-
+        for executable in Self::read_executables(&artifacts)? {
             std::fs::remove_file(executable).unwrap();
         }
 
@@ -140,7 +135,7 @@ impl Server {
         );
 
         // Upload all binaries.
-        for executable in Self::read_executables(&artifacts) {
+        for executable in Self::read_executables(&artifacts)? {
             let binary = executable.file_name().unwrap().to_str().unwrap();
             let file_name = format!("{binary}-{commit_hash}");
 
@@ -165,17 +160,20 @@ impl Server {
                 .build()
                 .unwrap();
 
-            println!("{request:#?}");
-
             // Send request & process response.
             let head = self.client.execute(request).await.unwrap();
             match head.status().as_u16() {
                 200 => {}
-                _ => panic!("Unexpected upload status code; head={head:?}"),
+                _ => {
+                    warn!(%binary, commit_hash, response = ?head, "Failed to upload binary");
+                    continue;
+                }
             }
 
             info!(%binary, commit_hash, file_name, "Uploaded");
         }
+
+        Ok(())
     }
 
     pub(crate) fn init(cxl: CancellationToken, opts: Opts) -> tokio::task::JoinHandle<()> {
@@ -206,13 +204,19 @@ impl Server {
             Self::reset_hard(repo).await;
 
             let hash_before = Self::head_hash(repo);
-            Self::pull(repo).await;
+            if let Err(err) = Self::pull(repo).await {
+                warn!(%err, repo = ?repo.path(), "Failed to pull repository");
+
+                continue;
+            };
             let hash_after = Self::head_hash(repo);
 
             if hash_after != hash_before {
                 info!(repo = ?repo.path(), "New commits, rebuilding");
 
-                self.rebuild(repo).await;
+                if let Err(err) = self.rebuild(repo).await {
+                    warn!(%err, repo = ?repo.path(), "Failed to rebuild repository");
+                }
             }
         }
     }

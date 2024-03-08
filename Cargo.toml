@@ -6,6 +6,7 @@ edition = "2021"
 readme = "README.md"
 
 [dependencies]
+anyhow = "1.0.80"
 clap = { version = "4.2.7", features = ["derive"] }
 clap_complete = "4.3.0"
 dotenvy = "0.15.7"
