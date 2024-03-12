@@ -36,6 +36,7 @@ impl Server {
             .arg(work_tree)
             .arg("reset")
             .arg("--hard")
+            .arg("origin/dev")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -52,7 +53,7 @@ impl Server {
         );
     }
 
-    async fn pull(repo: &Repository) -> anyhow::Result<()> {
+    async fn fetch(repo: &Repository) -> anyhow::Result<()> {
         let git_dir = repo.path();
         let work_tree = repo.path().parent().unwrap();
 
@@ -62,8 +63,7 @@ impl Server {
             .arg(git_dir)
             .arg("--work-tree")
             .arg(work_tree)
-            .arg("pull")
-            .arg("--ff-only")
+            .arg("fetch")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -72,7 +72,7 @@ impl Server {
             .await?;
         anyhow::ensure!(
             output.status.code() == Some(0),
-            "`git pull --ff-only` failed to execute; repo={work_tree:?}; output={}",
+            "`git fetch` failed to execute; repo={work_tree:?}; output={}",
             String::from_utf8_lossy(&output.stderr)
         );
 
@@ -204,14 +204,14 @@ impl Server {
         for repo in self.repos.iter().cycle() {
             debug!(repo = ?repo.path(), "Fetching repo");
 
-            Self::reset_hard(repo).await;
-
             let hash_before = Self::head_hash(repo);
-            if let Err(err) = Self::pull(repo).await {
-                warn!(%err, repo = ?repo.path(), "Failed to pull repository");
+            if let Err(err) = Self::fetch(repo).await {
+                warn!(%err, repo = ?repo.path(), "Failed to fetch repository");
 
                 continue;
             };
+            // NB: We reset to `origin/dev` instead of merging.
+            Self::reset_hard(repo).await;
             let hash_after = Self::head_hash(repo);
 
             if hash_after != hash_before {
