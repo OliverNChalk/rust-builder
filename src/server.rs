@@ -48,7 +48,7 @@ impl Server {
         assert_eq!(
             output.status.code(),
             Some(0),
-            "`git reset --hard` failed to execute; repo={work_tree:?}; output={}",
+            "`git reset --hard origin/dev` failed to execute; repo={work_tree:?}; output={}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -91,6 +91,11 @@ impl Server {
                 // Filter symlinks & directories (non regular files).
                 let metadata = path.metadata().unwrap();
                 if !metadata.is_file() {
+                    return false;
+                }
+
+                // Filter executables with file extension (typically solana artifacts).
+                if path.extension().is_some() {
                     return false;
                 }
 
