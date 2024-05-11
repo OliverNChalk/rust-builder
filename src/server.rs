@@ -117,8 +117,13 @@ impl Server {
         artifacts.push("release");
 
         // Remove existing binaries (ensures we stop uploading renamed/removed
-        // packages).
-        for executable in Self::read_executables(&artifacts)? {
+        // packages). We intentionally ignore errors as the target directory will not
+        // exist if this is the first time compiling.
+        for executable in Self::read_executables(&artifacts)
+            .ok()
+            .into_iter()
+            .flatten()
+        {
             std::fs::remove_file(executable).unwrap();
         }
 
