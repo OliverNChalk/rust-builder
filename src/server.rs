@@ -9,7 +9,7 @@ use reqwest::{multipart, Body};
 use tokio::process::Command;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace_span, warn, Span};
+use tracing::{debug, info, trace_span, warn, Instrument, Span};
 
 use crate::config::Config;
 use crate::opts::Opts;
@@ -18,12 +18,10 @@ const GIT_BIN: &str = "/usr/bin/git";
 
 pub(crate) struct Server {
     // Config.
-    cargo_path: PathBuf,
-    bin_serve_endpoint: String,
+    shared: SharedState,
 
     // State.
-    targets: Vec<TargetState>,
-    client: reqwest::Client,
+    targets: Vec<(Span, TargetState)>,
 }
 
 impl Server {
@@ -33,8 +31,11 @@ impl Server {
         config: Config,
     ) -> tokio::task::JoinHandle<()> {
         let server = Server {
-            bin_serve_endpoint: opts.bin_serve_endpoint,
-            cargo_path: opts.cargo_path,
+            shared: SharedState {
+                bin_serve_endpoint: opts.bin_serve_endpoint,
+                cargo_path: opts.cargo_path,
+                client: reqwest::Client::new(),
+            },
 
             targets: config
                 .targets
@@ -44,20 +45,18 @@ impl Server {
                     let repository = Box::leak(Box::new(Repository::open(path).unwrap()));
 
                     branches.into_iter().map(|(branch, binaries)| {
-                        let span =
-                            trace_span!("target_span", repository = ?repository.path(), branch);
-
-                        TargetState {
-                            repository,
-                            branch,
-                            binaries,
-                            last_build: Default::default(),
-                            span,
-                        }
+                        (
+                            trace_span!("target_span", repository = ?repository.path(), branch),
+                            TargetState {
+                                repository,
+                                branch,
+                                binaries,
+                                last_build: Default::default(),
+                            },
+                        )
                     })
                 })
                 .collect(),
-            client: reqwest::Client::new(),
         };
 
         tokio::task::spawn_local(async move {
@@ -68,29 +67,36 @@ impl Server {
         })
     }
 
-    async fn run(self) {
-        for target in self.targets.iter().cycle() {
-            let _span = target.span.enter();
+    async fn run(mut self) {
+        loop {
+            for (span, target) in self.targets.iter_mut() {
+                Self::check_target(&self.shared, target)
+                    .instrument(span.clone())
+                    .await;
+            }
+        }
+    }
 
-            // Update repo remote view.
-            debug!("Fetching target");
-            if let Err(err) = Self::fetch(target.repository).await {
-                warn!(%err, "Failed to fetch repository");
+    async fn check_target(shared: &SharedState, target: &mut TargetState) {
+        // Update repo remote view.
+        debug!("Fetching target");
+        if let Err(err) = Self::fetch(target.repository).await {
+            warn!(%err, "Failed to fetch repository");
 
-                continue;
-            };
+            return;
+        };
 
-            // Reset to the latest of the target branch.
-            Self::reset_hard(target.repository, &target.branch).await;
+        // Reset to the latest of the target branch.
+        Self::reset_hard(target.repository, &target.branch).await;
 
-            // Check if we have already built this commit.
-            let head_hash = Self::head_hash(target.repository);
-            if head_hash != target.last_build {
-                info!("New commit, rebuilding");
+        // Check if we have already built this commit.
+        let head_hash = Self::head_hash(target.repository);
+        if head_hash != target.last_build {
+            info!("New commit, rebuilding");
 
-                if let Err(err) = self.rebuild(target).await {
-                    warn!(%err, "Failed to rebuild target");
-                }
+            match Self::rebuild(shared, target).await {
+                Ok(_) => target.last_build = head_hash,
+                Err(err) => warn!(%err, "Failed to rebuild target"),
             }
         }
     }
@@ -181,7 +187,7 @@ impl Server {
             .collect())
     }
 
-    async fn rebuild(&self, target: &TargetState) -> anyhow::Result<()> {
+    async fn rebuild(shared: &SharedState, target: &TargetState) -> anyhow::Result<()> {
         let commit_hash = hex::encode(Self::head_hash(target.repository));
 
         // Setup paths.
@@ -204,7 +210,7 @@ impl Server {
         }
 
         // Re-build all binaries in workspace.
-        let output = Command::new(&self.cargo_path)
+        let output = Command::new(&shared.cargo_path)
             .arg("build")
             .arg("--release")
             .arg("--manifest-path")
@@ -243,17 +249,11 @@ impl Server {
             let form = multipart::Form::new().part("path", file_part);
 
             // Upload the file as a single part.
-            let url = format!("{}/upload?path=/", self.bin_serve_endpoint);
-            let request = self
-                .client
-                .post(url)
-                // .header(CONTENT_LENGTH, file_len)
-                .multipart(form)
-                .build()
-                .unwrap();
+            let url = format!("{}/upload?path=/", shared.bin_serve_endpoint);
+            let request = shared.client.post(url).multipart(form).build().unwrap();
 
             // Send request & process response.
-            let head = self.client.execute(request).await.unwrap();
+            let head = shared.client.execute(request).await.unwrap();
             match head.status().as_u16() {
                 200 => {}
                 _ => {
@@ -278,6 +278,10 @@ struct TargetState {
     binaries: HashSet<String>,
     /// Last successful build on this target.
     last_build: [u8; 20],
-    /// Standardizes all logs related to a target.
-    span: Span,
+}
+
+struct SharedState {
+    cargo_path: PathBuf,
+    bin_serve_endpoint: String,
+    client: reqwest::Client,
 }
