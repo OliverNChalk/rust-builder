@@ -4,12 +4,14 @@ use std::process::Stdio;
 
 use anyhow::anyhow;
 use git2::Repository;
+use hashbrown::HashSet;
 use reqwest::{multipart, Body};
 use tokio::process::Command;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace_span, warn, Span};
 
+use crate::config::Config;
 use crate::opts::Opts;
 
 const GIT_BIN: &str = "/usr/bin/git";
@@ -20,12 +22,80 @@ pub(crate) struct Server {
     bin_serve_endpoint: String,
 
     // State.
-    repos: Vec<Repository>,
+    targets: Vec<TargetState>,
     client: reqwest::Client,
 }
 
 impl Server {
-    async fn reset_hard(repo: &Repository) {
+    pub(crate) fn init(
+        cxl: CancellationToken,
+        opts: Opts,
+        config: Config,
+    ) -> tokio::task::JoinHandle<()> {
+        let server = Server {
+            bin_serve_endpoint: opts.bin_serve_endpoint,
+            cargo_path: opts.cargo_path,
+
+            targets: config
+                .targets
+                .into_iter()
+                .flat_map(|(repo, branches)| {
+                    let path = config.root.join(repo);
+                    let repository = Box::leak(Box::new(Repository::open(path).unwrap()));
+
+                    branches.into_iter().map(|(branch, binaries)| {
+                        let span =
+                            trace_span!("target_span", repository = ?repository.path(), branch);
+
+                        TargetState {
+                            repository,
+                            branch,
+                            binaries,
+                            last_build: Default::default(),
+                            span,
+                        }
+                    })
+                })
+                .collect(),
+            client: reqwest::Client::new(),
+        };
+
+        tokio::task::spawn_local(async move {
+            tokio::select! {
+                _ = server.run() => {},
+                _ = cxl.cancelled() => {},
+            }
+        })
+    }
+
+    async fn run(self) {
+        for target in self.targets.iter().cycle() {
+            let _span = target.span.enter();
+
+            // Update repo remote view.
+            debug!("Fetching target");
+            if let Err(err) = Self::fetch(target.repository).await {
+                warn!(%err, "Failed to fetch repository");
+
+                continue;
+            };
+
+            // Reset to the latest of the target branch.
+            Self::reset_hard(target.repository, &target.branch).await;
+
+            // Check if we have already built this commit.
+            let head_hash = Self::head_hash(target.repository);
+            if head_hash != target.last_build {
+                info!("New commit, rebuilding");
+
+                if let Err(err) = self.rebuild(target).await {
+                    warn!(%err, "Failed to rebuild target");
+                }
+            }
+        }
+    }
+
+    async fn reset_hard(repo: &Repository, branch: &str) {
         let git_dir = repo.path();
         let work_tree = repo.path().parent().unwrap();
 
@@ -36,7 +106,7 @@ impl Server {
             .arg(work_tree)
             .arg("reset")
             .arg("--hard")
-            .arg("origin/dev")
+            .arg(format!("origin/{branch}"))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -48,7 +118,7 @@ impl Server {
         assert_eq!(
             output.status.code(),
             Some(0),
-            "`git reset --hard origin/dev` failed to execute; repo={work_tree:?}; output={}",
+            "`git reset --hard origin/{branch}` failed to execute; repo={work_tree:?}; output={}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -79,8 +149,14 @@ impl Server {
         Ok(())
     }
 
-    fn head_hash(repo: &Repository) -> String {
-        hex::encode(repo.head().unwrap().target().unwrap().as_bytes())
+    fn head_hash(repo: &Repository) -> [u8; 20] {
+        repo.head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .as_bytes()
+            .try_into()
+            .unwrap()
     }
 
     fn read_executables(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -105,11 +181,11 @@ impl Server {
             .collect())
     }
 
-    async fn rebuild(&self, repo: &Repository) -> anyhow::Result<()> {
-        let commit_hash = Self::head_hash(repo);
+    async fn rebuild(&self, target: &TargetState) -> anyhow::Result<()> {
+        let commit_hash = hex::encode(Self::head_hash(target.repository));
 
         // Setup paths.
-        let repo_path = repo.path().parent().unwrap();
+        let repo_path = target.repository.path().parent().unwrap();
         let mut manifest_path = repo_path.to_path_buf();
         manifest_path.push("Cargo.toml");
         let mut artifacts = repo_path.to_path_buf();
@@ -150,8 +226,11 @@ impl Server {
         // Upload all binaries.
         for executable in Self::read_executables(&artifacts)? {
             let binary = executable.file_name().unwrap().to_str().unwrap();
-            let file_name = format!("{binary}-{commit_hash}");
+            if !target.binaries.contains(binary) {
+                continue;
+            }
 
+            let file_name = format!("{binary}-{commit_hash}");
             info!(%binary, commit_hash, file_name, "Uploading");
 
             // Load file & prepare for upload.
@@ -188,49 +267,17 @@ impl Server {
 
         Ok(())
     }
+}
 
-    pub(crate) fn init(cxl: CancellationToken, opts: Opts) -> tokio::task::JoinHandle<()> {
-        let server = Server {
-            bin_serve_endpoint: opts.bin_serve_endpoint,
-            cargo_path: opts.cargo_path,
-
-            repos: opts
-                .repos
-                .into_iter()
-                .map(|repo| Repository::open(repo).unwrap())
-                .collect(),
-            client: reqwest::Client::new(),
-        };
-
-        tokio::task::spawn_local(async move {
-            tokio::select! {
-                _ = server.run() => {},
-                _ = cxl.cancelled() => {},
-            }
-        })
-    }
-
-    async fn run(self) {
-        for repo in self.repos.iter().cycle() {
-            debug!(repo = ?repo.path(), "Fetching repo");
-
-            let hash_before = Self::head_hash(repo);
-            if let Err(err) = Self::fetch(repo).await {
-                warn!(%err, repo = ?repo.path(), "Failed to fetch repository");
-
-                continue;
-            };
-            // NB: We reset to `origin/dev` instead of merging.
-            Self::reset_hard(repo).await;
-            let hash_after = Self::head_hash(repo);
-
-            if hash_after != hash_before {
-                info!(repo = ?repo.path(), "New commits, rebuilding");
-
-                if let Err(err) = self.rebuild(repo).await {
-                    warn!(%err, repo = ?repo.path(), "Failed to rebuild repository");
-                }
-            }
-        }
-    }
+struct TargetState {
+    /// Repository to checkout for this target.
+    repository: &'static Repository,
+    /// Branch to checkout for this target.
+    branch: String,
+    /// The binaries to upload for this branch.
+    binaries: HashSet<String>,
+    /// Last successful build on this target.
+    last_build: [u8; 20],
+    /// Standardizes all logs related to a target.
+    span: Span,
 }

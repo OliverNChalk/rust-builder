@@ -9,9 +9,9 @@ pub(crate) struct Opts {
     #[arg(long, value_name = "SHELL")]
     pub(crate) completions: Option<clap_complete::Shell>,
 
-    /// Repositories to monitor & auto build.
-    #[clap(value_hint = ValueHint::DirPath)]
-    pub(crate) repos: Vec<PathBuf>,
+    /// Path to rust-builder config file.
+    #[clap(long, value_hint = ValueHint::FilePath)]
+    pub(crate) config: PathBuf,
     /// Bin serve instance to upload binaries to.
     #[clap(long, value_hint = ValueHint::Url, default_value = "http://localhost:8080")]
     pub(crate) bin_serve_endpoint: String,

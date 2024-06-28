@@ -1,3 +1,4 @@
+mod config;
 mod opts;
 mod server;
 
@@ -59,13 +60,17 @@ async fn main() {
     // Log build information.
     infra::log_build_info!();
 
+    // Load config file.
+    let config = serde_yaml::from_slice(&std::fs::read(&opts.config).unwrap()).unwrap();
+
     // Start local set for server to run in.
     let local = tokio::task::LocalSet::new();
 
     // Start server.
     let cxl = tokio_util::sync::CancellationToken::new();
     let child_cxl = cxl.clone();
-    let mut handle = pin!(local.run_until(async move { Server::init(child_cxl, opts).await }));
+    let mut handle =
+        pin!(local.run_until(async move { Server::init(child_cxl, opts, config).await }));
 
     // Wait for server exit or SIGINT.
     tokio::select! {
