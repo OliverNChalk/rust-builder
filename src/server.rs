@@ -9,7 +9,7 @@ use reqwest::{multipart, Body};
 use tokio::process::Command;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace_span, warn, Instrument, Span};
+use tracing::{debug, info, info_span, warn, Instrument, Span};
 
 use crate::config::Config;
 use crate::opts::Opts;
@@ -46,7 +46,7 @@ impl Server {
 
                     branches.into_iter().map(|(branch, binaries)| {
                         (
-                            trace_span!("target_span", repository = ?repository.path(), branch),
+                            info_span!("target_span", repository = ?repository.path(), branch),
                             TargetState {
                                 repository,
                                 branch,
