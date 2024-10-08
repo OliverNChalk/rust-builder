@@ -192,8 +192,6 @@ impl Server {
 
         // Setup paths.
         let repo_path = target.repository.path().parent().unwrap();
-        let mut manifest_path = repo_path.to_path_buf();
-        manifest_path.push("Cargo.toml");
         let mut artifacts = repo_path.to_path_buf();
         artifacts.push("target");
         artifacts.push("release");
@@ -213,10 +211,9 @@ impl Server {
         let output = Command::new(&shared.cargo_path)
             .arg("build")
             .arg("--release")
-            .arg("--manifest-path")
-            .arg(&manifest_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .current_dir(repo_path)
             .spawn()
             .unwrap()
             .wait_with_output()
@@ -225,7 +222,7 @@ impl Server {
         assert_eq!(
             output.status.code(),
             Some(0),
-            "`cargo build --release` failed to execute; manifest={manifest_path:?}; output={}",
+            "`cargo build --release` failed to execute; repo={repo_path:?}; output={}",
             String::from_utf8_lossy(&output.stderr)
         );
 
