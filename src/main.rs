@@ -39,9 +39,8 @@ async fn main() {
 
     // Parse .env if it exists.
     match dotenvy::dotenv() {
-        Err(dotenvy::Error::Io(_)) => {}
+        Ok(_) | Err(dotenvy::Error::Io(_)) => {}
         Err(err) => panic!("Failed to parse .env file; err={err}"),
-        Ok(_) => {}
     }
 
     // Log build information.

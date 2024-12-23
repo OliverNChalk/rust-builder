@@ -61,15 +61,15 @@ impl Server {
 
         tokio::task::spawn_local(async move {
             tokio::select! {
-                _ = server.run() => {},
-                _ = cxl.cancelled() => {},
+                () = server.run() => {},
+                () = cxl.cancelled() => {},
             }
         })
     }
 
     async fn run(mut self) {
         loop {
-            for (span, target) in self.targets.iter_mut() {
+            for (span, target) in &mut self.targets {
                 Self::check_target(&self.shared, target)
                     .instrument(span.clone())
                     .await;
@@ -95,7 +95,7 @@ impl Server {
             info!("New commit, rebuilding");
 
             match Self::rebuild(shared, target).await {
-                Ok(_) => target.last_build = head_hash,
+                Ok(()) => target.last_build = head_hash,
                 Err(err) => warn!(%err, "Failed to rebuild target"),
             }
         }
@@ -251,12 +251,9 @@ impl Server {
 
             // Send request & process response.
             let head = shared.client.execute(request).await.unwrap();
-            match head.status().as_u16() {
-                200 => {}
-                _ => {
-                    warn!(%binary, commit_hash, response = ?head, "Failed to upload binary");
-                    continue;
-                }
+            if head.status().as_u16() != 200 {
+                warn!(%binary, commit_hash, response = ?head, "Failed to upload binary");
+                continue;
             }
 
             info!(%binary, commit_hash, file_name, "Uploaded");
