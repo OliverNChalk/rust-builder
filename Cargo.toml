@@ -6,13 +6,13 @@ edition = "2021"
 readme = "README.md"
 
 [lints.clippy]
-arithmetic_side_effects = "warn"
 # See `clippy.toml`.
 disallowed_methods = "warn"
 match_bool = "allow"
 missing_const_for_fn = "warn"
 module_name_repetitions = "allow"
 pedantic = { level = "warn", priority = -1 }
+single_match_else = "allow"
 trivially_copy_pass_by_ref = "warn"
 
 [dependencies]
@@ -24,6 +24,7 @@ git2 = "0.18.2"
 hashbrown = "0.14.5"
 hex = "0.4.3"
 reqwest = { version = "0.11.24", features = ["multipart", "stream"] }
+resolve-path = "0.1.0"
 serde = { version = "1.0.203", features = ["derive"] }
 serde_with = { version = "3.11.0", features = ["hashbrown_0_14"] }
 serde_yaml = "0.9.34"

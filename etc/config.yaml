@@ -1,0 +1,8 @@
+---
+root: /home/oliver/repositories
+targets:
+  - repository_url: git@github.com:OliverNChalk/steve.git
+    ssh_key: ~/.ssh/id_ed25519
+    branch: main
+    executables:
+      - steve

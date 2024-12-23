@@ -6,13 +6,15 @@ use anyhow::anyhow;
 use git2::Repository;
 use hashbrown::HashSet;
 use reqwest::{multipart, Body};
+use resolve_path::PathResolveExt;
 use tokio::process::Command;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, warn, Instrument, Span};
 
 use crate::args::Args;
-use crate::config::{repository_name, BuildTarget, Config};
+use crate::config::{repository_name, Config};
+use crate::git::NiceRepository;
 
 const GIT_BIN: &str = "/usr/bin/git";
 
@@ -25,39 +27,39 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    pub(crate) fn init(
+    pub(crate) fn spawn(
         cxl: CancellationToken,
-        opts: Args,
+        args: Args,
         config: Config,
     ) -> tokio::task::JoinHandle<()> {
         let server = Server {
             shared: SharedState {
-                bin_serve_endpoint: opts.bin_serve_endpoint,
-                cargo_path: opts.cargo_path,
+                bin_serve_endpoint: args.bin_serve_endpoint,
+                cargo_path: args.cargo_path,
                 client: reqwest::Client::new(),
             },
 
             targets: config
                 .targets
                 .into_iter()
-                .map(|BuildTarget { repository_url, branch, executables }| {
-                    let repository = repository_name(&repository_url).unwrap_or_else(|| {
-                        panic!("Failed to parse repository URL; url={repository_url}")
+                .map(|target| {
+                    let repository = repository_name(&target.repository_url).unwrap_or_else(|| {
+                        panic!("Failed to parse repository URL; url={}", target.repository_url)
                     });
-                    let path = config.root.join(repository);
 
-                    let repository = match path.exists() {
-                        true => Repository::open(path).unwrap(),
-                        false => Repository::clone_recurse(&repository_url, &path).unwrap(),
-                    };
+                    // Resolve is used in case `~` is passed.
+                    let root = config.root.resolve();
+                    let path = root.join(repository);
+
+                    let repository = NiceRepository::lazy_open(&path, &target);
                     let repository = Box::leak(Box::new(repository));
 
                     (
-                        info_span!("target_span", repository = ?repository.path(), branch),
+                        info_span!("target_span", repository = ?repository.path(), target.branch),
                         TargetState {
                             repository,
-                            branch,
-                            binaries: executables,
+                            branch: target.branch,
+                            executables: target.executables,
                             last_build: Default::default(),
                         },
                     )
@@ -235,7 +237,7 @@ impl Server {
         // Upload all binaries.
         for executable in Self::read_executables(&artifacts)? {
             let binary = executable.file_name().unwrap().to_str().unwrap();
-            if !target.binaries.contains(binary) {
+            if !target.executables.contains(binary) {
                 continue;
             }
 
@@ -271,11 +273,11 @@ impl Server {
 
 struct TargetState {
     /// Repository to checkout for this target.
-    repository: &'static Repository,
+    repository: &'static NiceRepository,
     /// Branch to checkout for this target.
     branch: String,
     /// The binaries to upload for this branch.
-    binaries: HashSet<String>,
+    executables: HashSet<String>,
     /// Last successful build on this target.
     last_build: [u8; 20],
 }

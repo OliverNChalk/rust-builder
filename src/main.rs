@@ -1,5 +1,7 @@
 mod args;
 mod config;
+/// Contains git related code (hide war crimes).
+mod git;
 mod server;
 
 use std::pin::pin;
@@ -13,6 +15,7 @@ use crate::server::Server;
 async fn main() {
     // Parse command-line arguments.
     let args = crate::args::Args::parse();
+    assert!(args.cargo_path.exists(), "Cargo path does not exist; path={:?}", args.cargo_path);
 
     // If user is requesting completions, return them and exit.
     if let Some(shell) = args.completions {
@@ -27,7 +30,7 @@ async fn main() {
     }
 
     // Setup tracing.
-    let _log_guard = toolbox::tracing::setup_tracing("rust-builder", args.logs.as_deref()).unwrap();
+    let _log_guard = toolbox::tracing::setup_tracing("rust-builder", args.logs.as_deref());
 
     // Setup Continuum standard panic handling.
     let default_panic = std::panic::take_hook();
@@ -54,7 +57,9 @@ async fn main() {
 
     // Start server.
     let cxl = tokio_util::sync::CancellationToken::new();
-    let mut handle = pin!(local.run_until(Server::init(cxl.clone(), args, config)));
+    let child_cxl = cxl.clone();
+    let mut handle =
+        pin!(local.run_until(async move { Server::spawn(child_cxl.clone(), args, config).await }));
 
     // Wait for server exit or SIGINT.
     tokio::select! {

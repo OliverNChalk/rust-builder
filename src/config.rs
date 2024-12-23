@@ -14,25 +14,33 @@ pub(crate) struct Config {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct BuildTarget {
     pub(crate) repository_url: String,
+    pub(crate) ssh_key: PathBuf,
     pub(crate) branch: String,
     #[serde_as(as = "serde_with::SetPreventDuplicates<_>")]
     pub(crate) executables: HashSet<String>,
 }
 
 pub(crate) fn repository_name(url: &str) -> Option<String> {
-    let mut chars = url.chars();
+    let last_slash = url.bytes().rposition(|char| char == b'/')?;
+    let (_, name) = url.split_at_checked(last_slash + 1)?;
+    let mut name = name.to_string();
 
     if url.starts_with("git@") {
         // Extract the name.
-        chars.find(|char| char == &':')?;
-        let name: String = chars.take_while(|char| char != &'/').collect();
+        if let Some(idx) = name.chars().position(|char| char == '.') {
+            let rest = name.split_off(idx);
+            assert_eq!(
+                rest.chars().filter(|char| char == &'.').count(),
+                1,
+                "Name contained multiple '.'; url={url}"
+            );
+        }
         if name.is_empty() {
             return None;
         }
 
         Some(name)
     } else if url.starts_with("https://") {
-        let name: String = chars.rev().take_while(|char| char != &'/').collect();
         if name.is_empty() {
             return None;
         }
