@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, warn, Instrument, Span};
 
 use crate::args::Args;
-use crate::config::{BuildTarget, Config};
+use crate::config::{repository_name, BuildTarget, Config};
 
 const GIT_BIN: &str = "/usr/bin/git";
 
@@ -40,7 +40,10 @@ impl Server {
             targets: config
                 .targets
                 .into_iter()
-                .map(|BuildTarget { repository, branch, executables }| {
+                .map(|BuildTarget { repository_url, branch, executables }| {
+                    let repository = repository_name(&repository_url).unwrap_or_else(|| {
+                        panic!("Failed to parse repository URL; url={repository_url}")
+                    });
                     let path = config.root.join(repository);
                     let repository = Box::leak(Box::new(Repository::open(path).unwrap()));
 
