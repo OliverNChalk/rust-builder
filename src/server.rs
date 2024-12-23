@@ -45,7 +45,12 @@ impl Server {
                         panic!("Failed to parse repository URL; url={repository_url}")
                     });
                     let path = config.root.join(repository);
-                    let repository = Box::leak(Box::new(Repository::open(path).unwrap()));
+
+                    let repository = match path.exists() {
+                        true => Repository::open(path).unwrap(),
+                        false => Repository::clone_recurse(&repository_url, &path).unwrap(),
+                    };
+                    let repository = Box::leak(Box::new(repository));
 
                     (
                         info_span!("target_span", repository = ?repository.path(), branch),
