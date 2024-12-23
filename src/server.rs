@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, warn, Instrument, Span};
 
 use crate::args::Args;
-use crate::config::Config;
+use crate::config::{BuildTarget, Config};
 
 const GIT_BIN: &str = "/usr/bin/git";
 
@@ -40,21 +40,19 @@ impl Server {
             targets: config
                 .targets
                 .into_iter()
-                .flat_map(|(repo, branches)| {
-                    let path = config.root.join(repo);
+                .map(|BuildTarget { repository, branch, executables }| {
+                    let path = config.root.join(repository);
                     let repository = Box::leak(Box::new(Repository::open(path).unwrap()));
 
-                    branches.into_iter().map(|(branch, binaries)| {
-                        (
-                            info_span!("target_span", repository = ?repository.path(), branch),
-                            TargetState {
-                                repository,
-                                branch,
-                                binaries,
-                                last_build: Default::default(),
-                            },
-                        )
-                    })
+                    (
+                        info_span!("target_span", repository = ?repository.path(), branch),
+                        TargetState {
+                            repository,
+                            branch,
+                            binaries: executables,
+                            last_build: Default::default(),
+                        },
+                    )
                 })
                 .collect(),
         };
