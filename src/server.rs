@@ -11,8 +11,8 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, info_span, warn, Instrument, Span};
 
+use crate::args::Args;
 use crate::config::Config;
-use crate::opts::Opts;
 
 const GIT_BIN: &str = "/usr/bin/git";
 
@@ -27,7 +27,7 @@ pub(crate) struct Server {
 impl Server {
     pub(crate) fn init(
         cxl: CancellationToken,
-        opts: Opts,
+        opts: Args,
         config: Config,
     ) -> tokio::task::JoinHandle<()> {
         let server = Server {

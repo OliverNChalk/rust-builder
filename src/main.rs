@@ -1,11 +1,10 @@
+mod args;
 mod config;
-mod opts;
 mod server;
 
 use std::pin::pin;
 
 use clap::{CommandFactory, Parser};
-use infra::utils::tracing::{TracingConsoleOpts, TracingFileOpts, TracingOpts};
 use tracing::{error, info};
 
 use crate::server::Server;
@@ -13,13 +12,13 @@ use crate::server::Server;
 #[tokio::main]
 async fn main() {
     // Parse command-line arguments.
-    let opts = crate::opts::Opts::parse();
+    let args = crate::args::Args::parse();
 
     // If user is requesting completions, return them and exit.
-    if let Some(shell) = opts.completions {
+    if let Some(shell) = args.completions {
         clap_complete::generate(
             shell,
-            &mut crate::opts::Opts::command(),
+            &mut crate::args::Args::command(),
             "rust-builder",
             &mut std::io::stdout(),
         );
@@ -28,19 +27,7 @@ async fn main() {
     }
 
     // Setup tracing.
-    let _log_guard = infra::utils::tracing::setup_tracing(TracingOpts {
-        console: TracingConsoleOpts {
-            enabled: true,
-            additional_env_key: None,
-            default_filter: "INFO".to_owned(),
-        },
-        file: Some(TracingFileOpts {
-            log_directory: opts.logs.clone(),
-            file_name: "rust-builder".to_owned(),
-            default_filter: "INFO".to_owned(),
-        }),
-    })
-    .unwrap();
+    let _log_guard = toolbox::tracing::setup_tracing("rust-builder", args.logs.as_deref()).unwrap();
 
     // Setup Continuum standard panic handling.
     let default_panic = std::panic::take_hook();
@@ -58,10 +45,10 @@ async fn main() {
     }
 
     // Log build information.
-    infra::log_build_info!();
+    toolbox::log_build_info!();
 
     // Load config file.
-    let config = serde_yaml::from_slice(&std::fs::read(&opts.config).unwrap()).unwrap();
+    let config = serde_yaml::from_slice(&std::fs::read(&args.config).unwrap()).unwrap();
 
     // Start local set for server to run in.
     let local = tokio::task::LocalSet::new();
@@ -69,8 +56,7 @@ async fn main() {
     // Start server.
     let cxl = tokio_util::sync::CancellationToken::new();
     let child_cxl = cxl.clone();
-    let mut handle =
-        pin!(local.run_until(async move { Server::init(child_cxl, opts, config).await }));
+    let mut handle = pin!(local.run_until(Server::init(child_cxl, args, config)));
 
     // Wait for server exit or SIGINT.
     tokio::select! {

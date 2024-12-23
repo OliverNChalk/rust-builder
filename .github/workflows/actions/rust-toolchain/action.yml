@@ -1,9 +1,10 @@
 name: rust-toolchain
+description: "Sets up a standard rust toolchain"
 inputs:
   toolchain:
     description: "Which rust toolchain to use"
     required: false
-  personal-access-token:
+  token:
     description: "Access token for private repos"
     required: false
 
@@ -23,15 +24,12 @@ runs:
         profile: minimal
         toolchain: ${{ steps.get-toolchain.outputs.toolchain }}
         override: true
-    - uses: arduino/setup-protoc@v1
-      with:
-        repo-token: ${{ github.token }}
     - uses: Swatinem/rust-cache@v2.0.0
       with:
-        shared-key: "continuum"
-    - run: git config --global url."https://x-access-token:${{ inputs.personal-access-token }}@github.com/".insteadOf "https://github.com/"
-      if: ${{ inputs.personal-access-token != null }}
+        shared-key: ${{ steps.get-toolchain.outputs.toolchain }}
+    - run: git config --global url."https://x-access-token:${{ inputs.token }}@github.com/".insteadOf "https://github.com/"
+      if: ${{ inputs.token != null }}
       shell: bash
-    - run: git config --global url."https://${{ inputs.personal-access-token }}@github.com/".insteadOf "git@github.com:"
-      if: ${{ inputs.personal-access-token != null }}
+    - run: git config --global url."https://${{ inputs.token }}@github.com/".insteadOf "git@github.com:"
+      if: ${{ inputs.token != null }}
       shell: bash
