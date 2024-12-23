@@ -55,8 +55,7 @@ async fn main() {
 
     // Start server.
     let cxl = tokio_util::sync::CancellationToken::new();
-    let child_cxl = cxl.clone();
-    let mut handle = pin!(local.run_until(Server::init(child_cxl, args, config)));
+    let mut handle = pin!(local.run_until(Server::init(cxl.clone(), args, config)));
 
     // Wait for server exit or SIGINT.
     tokio::select! {
